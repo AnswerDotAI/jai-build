@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: portable-linux-${{ github.ref_name || github.run_id }}
@@ -42,7 +43,7 @@ jobs:
           JAI_RELEASE_TAG: ${{ github.ref_name }}
         run: ./build.sh jai-src
 
-      - name: Upload workflow artifact
+      - name: Upload tarball artifact
         uses: actions/upload-artifact@v4
         with:
           name: jai-portable-linux-amd64
@@ -61,3 +62,27 @@ jobs:
           else
             gh release create "$tag" dist/* --title "$tag" --generate-notes
           fi
+
+      - name: Build Python wheel
+        run: |
+          mkdir -p jai_binary
+          tar -xzf dist/jai-*-linux-amd64-glibc.tar.gz -C /tmp/
+          cp /tmp/jai-*-linux-amd64-glibc/jai jai_binary/jai
+          chmod +x jai_binary/jai
+          pip install setuptools wheel
+          python -m pip wheel . --no-deps --wheel-dir py-dist/
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jai-sandbox-wheel
+          path: py-dist/*.whl
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish to PyPI
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: py-dist/
+          skip-existing: true
