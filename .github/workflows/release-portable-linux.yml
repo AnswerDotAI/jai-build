@@ -1,0 +1,68 @@
+name: release-portable-linux-amd64
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional tag to upload assets to. If omitted, the workflow only publishes GitHub Actions artifacts.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: portable-linux-${{ github.event.release.tag_name || inputs.release_tag || github.ref_name || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    env:
+      JAI_RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake binutils g++-14 pandoc
+
+      - name: Clone jai source
+        run: git clone --depth 1 https://github.com/stanford-scs/jai.git jai-src
+
+      - name: Show build environment
+        run: |
+          uname -a
+          ldd --version | head -1
+          g++-14 --version | head -1
+
+      - name: Build portable tarball
+        run: ./build.sh jai-src
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jai-portable-linux-amd64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create or update GitHub release assets
+        if: ${{ env.JAI_RELEASE_TAG != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$JAI_RELEASE_TAG"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "$tag" --generate-notes
+          fi
