@@ -1,4 +1,4 @@
-name: release-portable-linux-amd64
+name: release-portable-linux
 
 on:
   push:
@@ -15,13 +15,34 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    name: build (${{ matrix.asset_arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset_arch: amd64
+          - runner: ubuntu-24.04-arm
+            asset_arch: arm64
     defaults:
       run:
         shell: bash
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show release metadata
+        run: python tools/version.py show
+
+      - name: Verify release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          expected_tag="$(python tools/version.py tag)"
+          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+            echo "Tag mismatch: workflow was triggered by $GITHUB_REF_NAME but release metadata expects $expected_tag" >&2
+            exit 1
+          fi
 
       - name: Install build toolchain
         run: |
@@ -30,7 +51,9 @@ jobs:
             autoconf automake binutils g++-14 pandoc
 
       - name: Clone jai source
-        run: git clone --depth 1 https://github.com/stanford-scs/jai.git jai-src
+        run: |
+          source_ref="$(python tools/version.py source-ref)"
+          git clone --depth 1 --branch "$source_ref" https://github.com/stanford-scs/jai.git jai-src
 
       - name: Show build environment
         run: |
@@ -38,50 +61,65 @@ jobs:
           ldd --version | head -1
           g++-14 --version | head -1
 
-      - name: Build portable tarball
-        env:
-          JAI_RELEASE_TAG: ${{ github.ref_name }}
-        run: ./build.sh jai-src
+      - name: Build portable artifacts
+        run: tools/package.sh jai-src
 
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v4
         with:
-          name: jai-portable-linux-amd64
+          name: jai-portable-linux-${{ matrix.asset_arch }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jai-sandbox-wheel-${{ matrix.asset_arch }}
+          path: py-dist/*.whl
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: jai-portable-linux-*
+          path: release-dist
+          merge-multiple: true
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: jai-sandbox-wheel-*
+          path: py-dist
+          merge-multiple: true
+
+      - name: Show release files
+        run: |
+          find release-dist -maxdepth 1 -type f | sort
+          find py-dist -maxdepth 1 -type f | sort
+
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/* --clobber
+            gh release upload "$tag" release-dist/* py-dist/* --clobber
           else
-            gh release create "$tag" dist/* --title "$tag" --generate-notes
+            gh release create "$tag" release-dist/* py-dist/* --title "$tag" --generate-notes
           fi
 
-      - name: Build Python wheel
-        run: |
-          mkdir -p jai_binary
-          tar -xzf dist/jai-*-linux-amd64-glibc.tar.gz -C /tmp/
-          cp /tmp/jai-*-linux-amd64-glibc/jai jai_binary/jai
-          chmod +x jai_binary/jai
-          pip install setuptools wheel
-          python -m pip wheel . --no-deps --wheel-dir py-dist/
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: jai-sandbox-wheel
-          path: py-dist/*.whl
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Publish to PyPI
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: py-dist/

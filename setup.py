@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import email.message
 import os
+import platform
+import runpy
 import shutil
 import tempfile
 from pathlib import Path
@@ -14,16 +16,54 @@ from wheel.wheelfile import WheelFile
 ROOT = Path(__file__).resolve().parent
 PACKAGE_NAME = "jai-sandbox"
 SUMMARY = "Linux sandbox for untrusted code execution"
+VERSION_HELPERS = runpy.run_path(str(ROOT / "tools" / "version.py"))
+ARCH_ALIASES = {
+    "aarch64": "aarch64",
+    "amd64": "x86_64",
+    "arm64": "aarch64",
+    "x86_64": "x86_64",
+}
 
 
 def package_version() -> str:
-    ns: dict[str, str] = {}
-    exec((ROOT / "src/jai_sandbox/__init__.py").read_text(encoding="utf-8"), ns)
-    return ns["__version__"]
+    return VERSION_HELPERS["package_version"]()
+
+
+def glibc_version() -> str:
+    override = os.environ.get("JAI_GLIBC_VERSION")
+    if override:
+        return override
+
+    libc_name, version = platform.libc_ver()
+    if libc_name == "glibc" and version:
+        return version
+
+    if "CS_GNU_LIBC_VERSION" in getattr(os, "confstr_names", {}):
+        value = os.confstr("CS_GNU_LIBC_VERSION")
+        if value and value.startswith("glibc "):
+            return value.split()[1]
+
+    raise RuntimeError("Unable to determine glibc version for wheel tag. Set JAI_GLIBC_VERSION.")
+
+
+def wheel_arch() -> str:
+    machine = platform.machine().lower()
+    try:
+        return ARCH_ALIASES[machine]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"Unsupported Linux architecture for wheel tag: {machine!r}. "
+            "Set JAI_WHEEL_PLATFORM_TAG explicitly to override."
+        ) from exc
 
 
 def wheel_platform_tag() -> str:
-    return "manylinux_2_39_x86_64"
+    override = os.environ.get("JAI_WHEEL_PLATFORM_TAG")
+    if override:
+        return override
+
+    major, minor, *_ = glibc_version().split(".")
+    return f"manylinux_{major}_{minor}_{wheel_arch()}"
 
 
 def write_text(path: Path, text: str) -> None:

@@ -1,3 +1,10 @@
 tags
 PLAN.md
 jai/
+.pkg/
+dist/
+jai_binary/
+py-dist/
+__pycache__/
+src/jai_sandbox/__pycache__/
+src/jai_sandbox.egg-info/

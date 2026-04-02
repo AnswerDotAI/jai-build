@@ -6,20 +6,30 @@ src_dir="$(cd "$src_dir" && pwd -P)"
 dist_dir="$(pwd -P)/dist"
 
 : "${CXX:=g++-14}"
+: "${PYTHON:=python3}"
 
-version_from_configure() {
-  sed -n 's/^AC_INIT(\[jai\], \[\([^]]*\)\].*/\1/p' "$src_dir/configure.ac" | head -n1
+host_arch="${JAI_ASSET_ARCH:-$(uname -m)}"
+
+asset_arch() {
+  case "$host_arch" in
+    x86_64|amd64)
+      echo "amd64"
+      ;;
+    aarch64|arm64)
+      echo "arm64"
+      ;;
+    *)
+      echo "Unsupported Linux architecture: $host_arch" >&2
+      exit 1
+      ;;
+  esac
 }
 
-if [[ -n "${JAI_RELEASE_TAG:-}" ]]; then
-  version="${JAI_RELEASE_TAG#refs/tags/}"
-  version="${version#v}"
-else
-  version="$(version_from_configure)"
-  [[ -n "${GITHUB_SHA:-}" ]] && version+="+git.${GITHUB_SHA::7}"
-fi
+version="$("$PYTHON" tools/version.py package-version)"
+upstream_version="$("$PYTHON" tools/version.py check-source --source-dir "$src_dir")"
+source_ref="$("$PYTHON" tools/version.py source-ref)"
 
-asset_base="jai-${version}-linux-amd64-glibc"
+asset_base="jai-${version}-linux-$(asset_arch)-glibc"
 stage_dir="$(pwd -P)/.pkg/$asset_base"
 
 rm -rf .pkg dist
@@ -60,6 +70,10 @@ EOF
 
 {
   echo "Built on: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  echo "Architecture: $host_arch"
+  echo "Upstream version: $upstream_version"
+  echo "Package version: $version"
+  echo "Source ref: $source_ref"
   echo "Compiler: $($CXX --version | head -1)"
   echo
   echo "Dynamic NEEDED entries:"
@@ -77,6 +91,6 @@ cd "$(dirname "$stage_dir")"
 tar -czf "$dist_dir/$asset_base.tar.gz" "$asset_base"
 
 cd "$dist_dir"
-sha256sum "$asset_base.tar.gz" > SHA256SUMS.txt
+sha256sum "$asset_base.tar.gz" > "$asset_base.tar.gz.sha256"
 
 echo "Created $dist_dir/$asset_base.tar.gz"
